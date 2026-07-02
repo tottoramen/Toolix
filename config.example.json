@@ -1,0 +1,29 @@
+{
+  "filter_order": [
+    ["示例工具", "tool"],
+    ["生产环境", "env"],
+    ["测试环境", "env"]
+  ],
+  "card_order": ["example-tool:0"],
+  "tool_order": [],
+  "claude_models": [],
+  "environments": [
+    { "id": "prod", "name": "生产环境" },
+    { "id": "test", "name": "测试环境" }
+  ],
+  "tools": [
+    {
+      "id": "example-tool",
+      "name": "示例工具",
+      "entries": [
+        {
+          "envs": ["prod"],
+          "url": "https://example.com",
+          "credentials": [
+            { "label": "admin", "username": "admin", "password": "your-password" }
+          ]
+        }
+      ]
+    }
+  ]
+}
