@@ -14,10 +14,8 @@ Toolix — 桌面工具控制面板。Python + PySide6。用户说"面板"即指
 # 运行
 python D:/projects/Toolix/main.py
 
-# 打包
-Stop-Process -Name Toolix -Force -ErrorAction SilentlyContinue
-pyinstaller -y --onedir --windowed --name "Toolix" --icon icon.ico --exclude-module PyQt5 main.py
-Start-Process "dist/Toolix/Toolix.exe"
+# 打包 + 启动（推荐）
+D:/projects/Toolix/build.ps1
 ```
 
 ## 配置修改流程

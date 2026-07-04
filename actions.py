@@ -53,10 +53,13 @@ def _open_terminal(command: str) -> None:
             ["open", "-a", "Terminal", "--args", escaped],
         )
     elif sys.platform == "win32":
+        # Use home dir as CWD instead of exe directory,
+        # otherwise orphan terminals lock dist/Toolix on rebuild.
+        home = os.path.expanduser("~")
         # Try Windows Terminal first
         try:
             subprocess.Popen(
-                ["wt.exe", "-d", ".", "cmd", "/k", command],
+                ["wt.exe", "-d", home, "cmd", "/k", command],
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
             return
@@ -67,6 +70,7 @@ def _open_terminal(command: str) -> None:
         subprocess.Popen(
             ["cmd", "/k", command],
             creationflags=subprocess.CREATE_NEW_CONSOLE,
+            cwd=home,
         )
     else:
         # Linux fallback

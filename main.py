@@ -243,6 +243,7 @@ def main():
     app.setStyleSheet(APP_STYLESHEET)
     app.setApplicationName("Toolix")
     app.setOrganizationName("Kiwi")
+    app.setWindowIcon(_make_icon())
 
     # Config path: QSettings memory > prompt > platform default
     settings = QSettings("Kiwi", "Toolix")
