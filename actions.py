@@ -1,6 +1,8 @@
 """Action dispatchers for tool entries."""
 
+import os
 import subprocess
+import sys
 import webbrowser
 from models import Entry
 
@@ -39,20 +41,35 @@ def run_command(cmd_index: int, entry: Entry) -> None:
 
 def _open_terminal(command: str) -> None:
     """Open a terminal window and execute the given command.
-    Prefers Windows Terminal (wt.exe), falls back to cmd.exe.
-    """
-    # Try Windows Terminal first
-    try:
-        subprocess.Popen(
-            ["wt.exe", "-d", ".", "cmd", "/k", command],
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        return
-    except FileNotFoundError:
-        pass
 
-    # Fall back to cmd.exe
-    subprocess.Popen(
-        ["cmd", "/k", command],
-        creationflags=subprocess.CREATE_NEW_CONSOLE,
-    )
+    Windows: prefers Windows Terminal (wt.exe), falls back to cmd.exe.
+    macOS: opens Terminal.app.
+    Linux: uses x-terminal-emulator.
+    """
+    if sys.platform == "darwin":
+        # macOS: open Terminal.app and run the command
+        escaped = command.replace("\\", "\\\\").replace('"', '\\"')
+        subprocess.Popen(
+            ["open", "-a", "Terminal", "--args", escaped],
+        )
+    elif sys.platform == "win32":
+        # Try Windows Terminal first
+        try:
+            subprocess.Popen(
+                ["wt.exe", "-d", ".", "cmd", "/k", command],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            return
+        except FileNotFoundError:
+            pass
+
+        # Fall back to cmd.exe
+        subprocess.Popen(
+            ["cmd", "/k", command],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+    else:
+        # Linux fallback
+        subprocess.Popen(
+            ["x-terminal-emulator", "-e", f"bash -c '{command}; exec bash'"],
+        )

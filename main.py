@@ -1,19 +1,95 @@
 """Tool Control Panel — main application entry point."""
 
+import os
 import sys
 
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QVBoxLayout, QWidget,
-    QMessageBox,
+    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
+    QDialog, QLabel, QLineEdit, QPushButton, QFileDialog, QMessageBox,
 )
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
 
-from config import load_config, save_config, Config
+from config import load_config, save_config, set_config_path, Config
 from ui.search_bar import SearchBar
 from ui.filter_bar import FilterBar
 from ui.matrix_table import MatrixTable
 from ui.style import APP_STYLESHEET
+
+
+class ConfigSetupDialog(QDialog):
+    """First-run dialog: user sets TOOLIX_CONFIG_DIR env var."""
+
+    def __init__(self, default_path: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("配置路径设置")
+        self.setMinimumWidth(520)
+        self.setStyleSheet("""
+            QDialog { background-color: #1e1e2e; }
+            QLabel { color: #cdd6f4; font-size: 13px; }
+            QLineEdit { background-color: #313244; color: #cdd6f4; border: 1px solid #45475a;
+                border-radius: 4px; padding: 6px 10px; font-size: 13px; }
+            QPushButton { background-color: #45475a; color: #cdd6f4; border: none;
+                border-radius: 4px; padding: 6px 16px; font-size: 13px; }
+            QPushButton:hover { background-color: #585b70; }
+            QPushButton#primary { background-color: #89b4fa; color: #1e1e2e;
+                font-weight: bold; }
+            QPushButton#primary:hover { background-color: #b4d0fb; }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 16, 20, 16)
+
+        layout.addWidget(QLabel(
+            "首次运行，请选择配置文件存放目录："
+        ))
+
+        row = QHBoxLayout()
+        self._input = QLineEdit()
+        self._input.setPlaceholderText("例如: D:\\config")
+        self._input.setText(default_path)
+        row.addWidget(self._input, 1)
+        browse_btn = QPushButton("浏览...")
+        browse_btn.clicked.connect(self._browse)
+        row.addWidget(browse_btn)
+        layout.addLayout(row)
+
+        layout.addSpacing(4)
+        name_label = QLabel("文件名固定为 <b>toolix.json</b>")
+        name_label.setStyleSheet("color: #a6adc8; font-size: 12px;")
+        layout.addWidget(name_label)
+
+        layout.addSpacing(4)
+        hint = QLabel("选择后会自动记住，下次启动无需再设。")
+        hint.setStyleSheet("color: #a6adc8; font-size: 12px;")
+        layout.addWidget(hint)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        cancel_btn = QPushButton("退出")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+        ok_btn = QPushButton("确认")
+        ok_btn.setObjectName("primary")
+        ok_btn.clicked.connect(self._on_ok)
+        btn_row.addWidget(ok_btn)
+        layout.addLayout(btn_row)
+
+    def _browse(self):
+        path = QFileDialog.getExistingDirectory(self, "选择配置目录")
+        if path:
+            self._input.setText(path)
+
+    def _on_ok(self):
+        dir_path = self._input.text().strip()
+        if not dir_path:
+            return
+        self._chosen_path = os.path.join(dir_path, "toolix.json")
+        self.accept()
+
+    def chosen_path(self) -> str:
+        return getattr(self, "_chosen_path", "")
 
 
 def _make_icon() -> QIcon:
@@ -51,11 +127,11 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("工具控制面板")
+        self.setWindowTitle("Toolix")
         self.setWindowIcon(_make_icon())
         self.setMinimumSize(600, 400)
 
-        settings = QSettings("Kiwi", "ToolPanel")
+        settings = QSettings("Kiwi", "Toolix")
         geometry = settings.value("geometry")
         if geometry:
             self.restoreGeometry(geometry)
@@ -96,8 +172,24 @@ class MainWindow(QMainWindow):
             self.matrix.set_config(self._config)
 
     def _on_search(self, text: str) -> None:
+        if text.strip().lower() == "setting":
+            self.search_bar.clear()
+            self._change_config_dir()
+            return
         self.filter_bar.reset()
         self.matrix.apply_filter(text)
+
+    def _change_config_dir(self) -> None:
+        """Open the config directory setup dialog to change the config path."""
+        dlg = ConfigSetupDialog("", self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            chosen = dlg.chosen_path()
+            if chosen:
+                settings = QSettings("Kiwi", "Toolix")
+                set_config_path(chosen)
+                settings.setValue("config_dir", chosen)
+                # Reload with new config
+                self._load()
 
     def _on_tool_filter(self, tool_name: str) -> None:
         self.search_bar.clear()
@@ -134,7 +226,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "配置加载失败", str(e))
 
     def closeEvent(self, event) -> None:
-        settings = QSettings("Kiwi", "ToolPanel")
+        settings = QSettings("Kiwi", "Toolix")
         settings.setValue("geometry", self.saveGeometry())
         super().closeEvent(event)
 
@@ -149,8 +241,23 @@ def main():
     sys.excepthook = _excepthook
     app = QApplication(sys.argv)
     app.setStyleSheet(APP_STYLESHEET)
-    app.setApplicationName("ToolPanel")
+    app.setApplicationName("Toolix")
     app.setOrganizationName("Kiwi")
+
+    # Config path: QSettings memory > prompt > platform default
+    settings = QSettings("Kiwi", "Toolix")
+    saved = settings.value("config_dir") or ""
+    if saved and os.path.isfile(saved):
+        set_config_path(saved)
+    else:
+        # No saved path or file gone — show setup dialog
+        dlg = ConfigSetupDialog("")
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            sys.exit(0)
+        chosen = dlg.chosen_path()
+        if chosen:
+            set_config_path(chosen)
+            settings.setValue("config_dir", chosen)
 
     window = MainWindow()
     window.show()

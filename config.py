@@ -2,27 +2,31 @@
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from models import Config, Tool, Entry, Environment, Credential, Command, Field, ClaudeModel
 
+# Module-level config path, set by main.py on startup
+_config_file_path: Path | None = None
 
-def _config_path() -> Path:
-    """Get the path to config.json in project-root user_data/ directory.
 
-    Separated from dist/ so PyInstaller COLLECT never touches user data.
-    """
-    if getattr(sys, 'frozen', False):
-        # exe is at dist/ToolPanel/ToolPanel.exe → go up 2 levels to project root
-        base = Path(sys.executable).parent.parent.parent
-    else:
-        base = Path(__file__).parent  # config.py is in project root
-    return base / "user_data" / "config.json"
+def set_config_path(path: str | Path) -> None:
+    """Set the config file path. Called by main.py on startup."""
+    global _config_file_path
+    _config_file_path = Path(path)
+
+
+def _config_path() -> Path | None:
+    """Get config.json path, or None if not set."""
+    return _config_file_path
 
 
 def load_config() -> Config:
     """Load config.json, or generate a template if it doesn't exist."""
     path = _config_path()
+    if path is None:
+        raise RuntimeError("Config path not set. Call set_config_path() first.")
     if not path.exists():
         _write_template(path)
         return _template_config()
@@ -73,8 +77,10 @@ def _parse_config(data: dict) -> Config:
         ClaudeModel(id=m["id"], name=m["name"], env=m.get("env", {}))
         for m in data.get("claude_models", [])
     ]
+    claude_dirs = data.get("claude_dirs", ["claude", "udreader", "Toolix"])
     return Config(tools=tools, environments=environments,
                   claude_models=claude_models,
+                  claude_dirs=claude_dirs,
                   filter_order=data.get("filter_order", []),
                   tool_order=data.get("tool_order", []),
                   card_order=data.get("card_order", []))
@@ -86,6 +92,7 @@ def save_config(config: Config) -> None:
         "filter_order": config.filter_order,
         "tool_order": config.tool_order,
         "card_order": config.card_order,
+        "claude_dirs": config.claude_dirs,
         "environments": [
             {"id": e.id, "name": e.name}
             for e in config.environments
@@ -146,60 +153,22 @@ def _entry_to_dict(entry: Entry) -> dict:
 
 
 def _write_template(path: Path) -> None:
-    """Write a template config file with example data."""
-    template = {
-        "environments": [
-            {"id": "prod", "name": "生产环境"},
-            {"id": "test", "name": "测试环境"},
-        ],
-        "tools": [
-            {
-                "id": "example-tool",
-                "name": "示例工具",
-                "icon": "",
-                "entries": [
-                    {
-                        "envs": ["prod"],
-                        "url": "https://example.com",
-                        "credentials": [
-                            {"label": "admin", "username": "admin", "password": "your-password"}
-                        ]
-                    }
-                ]
-            }
-        ]
-    }
+    """Write an empty template config file."""
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(template, f, ensure_ascii=False, indent=2)
+        f.write("{}")
 
 
 def _template_config() -> Config:
-    """Return a template Config object (matches _write_template)."""
-    return Config(
-        environments=[
-            Environment(id="prod", name="生产环境"),
-            Environment(id="test", name="测试环境"),
-        ],
-        tools=[
-            Tool(
-                id="example-tool",
-                name="示例工具",
-                icon="",
-                entries=[
-                    Entry(
-                        envs=["prod"],
-                        url="https://example.com",
-                        credentials=[
-                            Credential(label="admin", username="admin", password="your-password")
-                        ]
-                    )
-                ]
-            )
-        ]
-    )
+    """Return an empty template Config (matches _write_template)."""
+    return Config()
 
 
 def open_config_in_editor() -> None:
     """Open config.json in the system default editor."""
     path = str(_config_path())
-    os.startfile(path)
+    if sys.platform == "win32":
+        os.startfile(path)
+    elif sys.platform == "darwin":
+        subprocess.run(["open", path])
+    else:
+        subprocess.run(["xdg-open", path])

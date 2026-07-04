@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, QSettings
 import os
+import sys
 import tempfile
 
 from models import Entry, ClaudeModel
@@ -148,7 +149,7 @@ class CredentialDialog(QDialog):
 class ClaudeCodeDialog(QDialog):
     """Custom launch dialog for local Claude Code. Models are driven by config.json claude_models."""
 
-    def __init__(self, claude_models: list[ClaudeModel], parent=None):
+    def __init__(self, claude_models: list[ClaudeModel], claude_dirs: list[str] | None = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("启动 Claude Code")
         self.setMinimumWidth(420)
@@ -178,12 +179,15 @@ class ClaudeCodeDialog(QDialog):
             QRadioButton::indicator:checked { border-color: #89b4fa; background-color: #89b4fa; }
         """)
 
-        self._settings = QSettings("Kiwi", "ToolPanel")
+        self._settings = QSettings("Kiwi", "Toolix")
         self._claude_models = claude_models
         self._model_map: dict[str, dict[str, str]] = {m.id: m.env for m in claude_models}
 
-        project_dir = "D:\\projects"
-        subdirs = ["claude", "udreader", "sdk"]
+        if sys.platform == "darwin":
+            project_dir = os.path.expanduser("~/projects")
+        else:
+            project_dir = "D:\\projects"
+        subdirs = claude_dirs if claude_dirs else ["claude", "udreader", "Toolix"]
         last_dir = self._settings.value("claude/dir") or ""
         default_dir = last_dir if last_dir and os.path.isdir(last_dir) else os.path.join(project_dir, "claude")
 
@@ -253,17 +257,32 @@ class ClaudeCodeDialog(QDialog):
 
         env = self._model_map.get(model_id, {})
 
-        # Build temp .ps1: set env vars then launch claude
-        lines = [f"Set-Location -LiteralPath '{d}'"]
-        for key, value in env.items():
-            lines.append(f"$env:{key} = '{value}'")
-        lines.append("claude")
+        # Build temp script: set env vars then launch claude
+        if sys.platform == "darwin":
+            # macOS: .command file (native executable shell script)
+            lines = [f"cd '{d}'"]
+            for key, value in env.items():
+                lines.append(f"export {key}='{value}'")
+            lines.append("claude")
 
-        fd, path = tempfile.mkstemp(suffix=".ps1", prefix="cc_")
-        with os.fdopen(fd, "w") as f:
-            f.write("\n".join(lines))
+            fd, path = tempfile.mkstemp(suffix=".command", prefix="cc_")
+            with os.fdopen(fd, "w") as f:
+                f.write("\n".join(lines))
+            os.chmod(path, 0o755)
 
-        self._cmd = f'powershell -NoExit -ExecutionPolicy Bypass -File "{path}"'
+            self._cmd = f'open -a Terminal "{path}"'
+        else:
+            # Windows: .ps1 PowerShell script
+            lines = [f"Set-Location -LiteralPath '{d}'"]
+            for key, value in env.items():
+                lines.append(f"$env:{key} = '{value}'")
+            lines.append("claude")
+
+            fd, path = tempfile.mkstemp(suffix=".ps1", prefix="cc_")
+            with os.fdopen(fd, "w") as f:
+                f.write("\n".join(lines))
+
+            self._cmd = f'powershell -NoExit -ExecutionPolicy Bypass -File "{path}"'
         self.accept()
 
     def command(self) -> str:

@@ -419,7 +419,8 @@ class MatrixTable(QScrollArea):
         cmd = entry.ssh
         if cmd and cmd.startswith("claude"):
             from ui.cell_widget import ClaudeCodeDialog
-            dlg = ClaudeCodeDialog(self._config.claude_models if self._config else [], self)
+            dlg = ClaudeCodeDialog(self._config.claude_models if self._config else [],
+                                    self._config.claude_dirs if self._config else None, self)
             if dlg.exec():
                 cmd = dlg.command()
             else:

@@ -83,6 +83,7 @@ class Config:
     tools: list[Tool] = field(default_factory=list)
     environments: list[Environment] = field(default_factory=list)
     claude_models: list[ClaudeModel] = field(default_factory=list)
+    claude_dirs: list[str] = field(default_factory=list)          # subdir names under D:\projects\
     filter_order: list[list[str]] = field(default_factory=list)  # [[name, ftype], ...]
     tool_order: list[str] = field(default_factory=list)           # [tool_id, ...]
     card_order: list[str] = field(default_factory=list)           # ["tool_id:entry_idx", ...]
