@@ -18,6 +18,21 @@ python D:/projects/Toolix/main.py
 D:/projects/Toolix/build.ps1
 ```
 
+## 调试
+
+`debug_log.py` 提供 trace 日志 + `faulthandler`（segfault 时把 C 栈 dump 到同一文件）。**默认关闭、零开销** —— `init()`/`log()` 首行即 return，不建文件、不挂 handler。
+
+- **开关**：环境变量 `TOOLIX_DEBUG=1`（取值 `1`/`true`/`yes`，大小写不敏感）；不设即关
+  - PowerShell: `$env:TOOLIX_DEBUG=1; & "D:/projects/Toolix/dist/Toolix/Toolix.exe"`
+  - cmd: `set TOOLIX_DEBUG=1 && dist\Toolix\Toolix.exe`
+  - 源码同理: `$env:TOOLIX_DEBUG=1; python main.py`
+- **日志路径**: `~/toolix-debug.log`（即 `C:\Users\<user>\toolix-debug.log`），追加写、行缓冲 + 每次 flush
+- **判定点**: `_enabled()` 进程内只算一次（缓存到 `_enabled_cache`），运行中改环境变量必须**重启**才生效
+- **埋点**: `_on_add_chip` / `_on_edit_chip` / `FilterBar._build` / `FilterBar._clear` / `MatrixTable._lay_out` / `MatrixTable.set_config` / `MainWindow._on_filters_changed`
+- **segfault 定位**: faulthandler 自动把 C 栈 dump 到日志末尾 —— 最后一条 trace = 崩溃点
+
+排查闪退：`TOOLIX_DEBUG=1` 启动 → 复现 → 看日志最后一条 + 末尾栈 dump。
+
 ## 配置修改流程
 
 配置文件 `toolix.json`，首次运行用户选择目录，QSettings 持久化。

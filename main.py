@@ -15,6 +15,7 @@ from ui.search_bar import SearchBar
 from ui.filter_bar import FilterBar
 from ui.matrix_table import MatrixTable
 from ui.style import APP_STYLESHEET
+import debug_log
 
 
 class ConfigSetupDialog(QDialog):
@@ -126,6 +127,7 @@ class MainWindow(QMainWindow):
     """Main application window."""
 
     def __init__(self):
+        debug_log.log("MainWindow.__init__ enter")
         super().__init__()
         self.setWindowTitle("Toolix")
         self.setWindowIcon(_make_icon())
@@ -165,11 +167,15 @@ class MainWindow(QMainWindow):
 
     def _on_filters_changed(self) -> None:
         """Reload matrix when filter chips are added/edited."""
+        debug_log.log("_on_filters_changed enter")
         if self._config:
             tools = [t.name for t in self._config.tools]
             envs = [e.name for e in self._config.environments]
+            debug_log.log("_on_filters_changed -> filter_bar.set_filters")
             self.filter_bar.set_filters(tools, envs)
+            debug_log.log("_on_filters_changed -> matrix.set_config")
             self.matrix.set_config(self._config)
+            debug_log.log("_on_filters_changed done")
 
     def _on_search(self, text: str) -> None:
         if text.strip().lower() == "setting":
@@ -210,8 +216,11 @@ class MainWindow(QMainWindow):
         self.matrix.set_env_filter(name)
 
     def _load(self) -> None:
+        debug_log.log("_load enter")
         try:
             self._config = load_config()
+            debug_log.log(f"_load config ok: {len(self._config.tools)} tools, "
+                          f"{len(self._config.environments)} envs")
             self.filter_bar.reset()
             self.filter_bar.set_config(self._config, lambda: save_config(self._config))
             tools = [t.name for t in self._config.tools]
@@ -239,6 +248,7 @@ def _excepthook(exc_type, exc_value, traceback):
 
 def main():
     sys.excepthook = _excepthook
+    debug_log.init()
     app = QApplication(sys.argv)
     app.setStyleSheet(APP_STYLESHEET)
     app.setApplicationName("Toolix")

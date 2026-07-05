@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QPoint
 
 from models import Config, Entry, Tool
+from debug_log import log
 
 
 class MatrixTable(QScrollArea):
@@ -46,9 +47,11 @@ class MatrixTable(QScrollArea):
     # ── config / filter ──────────────────────────────────────────
 
     def set_config(self, config: Config) -> None:
+        log(f"MatrixTable.set_config enter tools={len(config.tools)}")
         self._config = config
         self._env_names = {e.id: e.name for e in config.environments}
         self._lay_out()
+        log("MatrixTable.set_config done")
 
     def apply_filter(self, text: str) -> None:
         self._filter_text = text.lower().strip()
@@ -97,6 +100,8 @@ class MatrixTable(QScrollArea):
         for key in self._config.card_order:
             if key not in all_keys:
                 continue
+            if key in seen:
+                continue
             tid, idx_s = key.rsplit(":", 1)
             tool = tool_map.get(tid)
             if tool is None:
@@ -116,9 +121,11 @@ class MatrixTable(QScrollArea):
         return result
 
     def _lay_out(self):
+        log(f"MatrixTable._lay_out enter rebuilding={self._rebuilding}")
         if self._rebuilding:
             return
         self._rebuilding = True
+        log("MatrixTable._lay_out clearing old widgets")
 
         while self._layout.count():
             item = self._layout.takeAt(0)
@@ -136,6 +143,7 @@ class MatrixTable(QScrollArea):
             self._rebuilding = False
             return
 
+        log("MatrixTable._lay_out collecting visible items")
         items: list[tuple[str, Tool, Entry]] = []
         for key, tool, entry in self._ordered_entries():
             if entry.is_empty:
@@ -151,9 +159,11 @@ class MatrixTable(QScrollArea):
             items.append((key, tool, entry))
 
         if not items:
+            log("MatrixTable._lay_out no visible items, done")
             self._rebuilding = False
             return
 
+        log(f"MatrixTable._lay_out building {len(items)} cards")
         avail = max(self.width() - 24, 200)
         row = QHBoxLayout()
         row.setSpacing(4)
@@ -182,6 +192,7 @@ class MatrixTable(QScrollArea):
         row.addStretch()
         self._layout.addStretch()
         self._rebuilding = False
+        log("MatrixTable._lay_out done")
 
     def _entry_visible(self, tool_name: str, entry: Entry) -> bool:
         if not self._filter_text:
@@ -200,6 +211,7 @@ class MatrixTable(QScrollArea):
         return False
 
     def _build_card(self, key: str, tool: Tool, entry: Entry) -> QWidget:
+        log(f"MatrixTable._build_card key={key} tool={tool.name}")
         card = QWidget()
         card.setObjectName("cell-content-dragging" if key == self._drag_key else "cell-content")
         card.setProperty("drag_key", key)

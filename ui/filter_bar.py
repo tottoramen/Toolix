@@ -9,6 +9,7 @@ from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QFont
 import re
 
 from models import Tool, Entry, Environment
+from debug_log import log
 
 
 def _to_kebab(name: str) -> str:
@@ -91,8 +92,13 @@ class _ChipEditDialog(QDialog):
         btn_row.addWidget(save_btn)
         layout.addLayout(btn_row)
 
-    def result(self) -> tuple[str, str] | None:
-        """Return (name, ftype) if accepted, else None."""
+    def prompt(self) -> tuple[str, str] | None:
+        """Run modally; return (name, ftype) if accepted, else None.
+
+        Renamed from result() — overriding QDialog.result() (which Qt's
+        exec() calls internally) to return a tuple is a C++/Python boundary
+        hazard.
+        """
         if self.exec() == QDialog.Rejected:
             return None
         name = self._name_edit.text().strip()
@@ -248,6 +254,7 @@ class FilterBar(QWidget):
         self._save_fn = save_fn
 
     def set_filters(self, tools: list[str], envs: list[str]) -> None:
+        log(f"FilterBar.set_filters enter tools={len(tools)} envs={len(envs)}")
         all_items = [(t, "tool") for t in tools] + [(e, "env") for e in envs]
         saved = self._config.filter_order if self._config else []
         if saved:
@@ -266,7 +273,9 @@ class FilterBar(QWidget):
             self._build()
 
     def _build(self):
+        log("FilterBar._build enter")
         self._clear()
+        log("FilterBar._build cleared, laying out chips")
         w = max(self.width() - 16, 200)
         row = QHBoxLayout(); row.setSpacing(2)
         self._outer.addLayout(row)
@@ -280,6 +289,7 @@ class FilterBar(QWidget):
             btn = self._make_chip(name, ftype)
             row, x = self._place(row, x, w, btn)
         row.addStretch()
+        log(f"FilterBar._build done chips={len(self._items)}")
 
     def _make_add_btn(self):
         btn = QPushButton("+")
@@ -293,9 +303,25 @@ class FilterBar(QWidget):
         btn.clicked.connect(self._on_add_chip)
         return btn
 
+    def _unique_id(self, base: str, ftype: str) -> str:
+        """Return base, or base-2 / base-3 ... so the new id never collides
+        with an existing tool/env id. Duplicate ids corrupt tool_map and
+        card_order and have caused crashes."""
+        existing = ({t.id for t in self._config.tools} if ftype == "tool"
+                    else {e.id for e in self._config.environments})
+        if base not in existing:
+            return base
+        i = 2
+        while f"{base}-{i}" in existing:
+            i += 1
+        return f"{base}-{i}"
+
     def _on_add_chip(self):
+        log("_on_add_chip enter")
         dlg = _ChipEditDialog("", "tool", self)
-        res = dlg.result()
+        log("_on_add_chip opening dialog")
+        res = dlg.prompt()
+        log(f"_on_add_chip dialog result={res}")
         if res is None:
             return
         name, ftype = res
@@ -304,17 +330,23 @@ class FilterBar(QWidget):
 
         # Add to config
         if ftype == "tool":
-            tid = _to_kebab(name)
+            tid = self._unique_id(_to_kebab(name), "tool")
+            log(f"_on_add_chip appending tool id={tid!r} name={name!r}")
             self._config.tools.append(Tool(id=tid, name=name, entries=[Entry(envs=["general"])]))
             self._config.card_order.append(f"{tid}:0")
         else:
-            eid = _to_kebab(name)
+            eid = self._unique_id(_to_kebab(name), "env")
+            log(f"_on_add_chip appending env id={eid!r} name={name!r}")
             self._config.environments.append(Environment(id=eid, name=name))
 
         self._items.append((name, ftype))
+        log("_on_add_chip -> _save_order")
         self._save_order()
+        log("_on_add_chip -> _build")
         self._build()
+        log("_on_add_chip -> emit filters_changed")
         self.filters_changed.emit()
+        log("_on_add_chip done")
 
     def _make_chip(self, name: str, ftype: str):
         color, bg = ("#89b4fa", "#1e2a3a") if ftype == "tool" else ("#a6adc8", "#252a35")
@@ -339,6 +371,7 @@ class FilterBar(QWidget):
         return row, x + bw
 
     def _clear(self):
+        log(f"FilterBar._clear enter count={self._outer.count()}")
         while self._outer.count():
             item = self._outer.takeAt(0)
             w = item.widget()
@@ -353,8 +386,9 @@ class FilterBar(QWidget):
     # ── chip edit ─────────────────────────────────────────────────
 
     def _on_edit_chip(self, name: str, ftype: str = ""):
+        log(f"_on_edit_chip enter name={name!r} ftype={ftype!r}")
         dlg = _ChipEditDialog(name, ftype, self)
-        res = dlg.result()
+        res = dlg.prompt()
         if res is None:
             return
         new_name, new_ftype = res
