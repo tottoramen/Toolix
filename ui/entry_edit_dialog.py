@@ -296,7 +296,7 @@ class EntryEditDialog(QDialog):
 
         add_cred_btn = QPushButton("+ 添加凭据")
         add_cred_btn.setObjectName("add-btn")
-        add_cred_btn.clicked.connect(self._add_credential)
+        add_cred_btn.clicked.connect(lambda checked: self._add_credential())
         layout.addWidget(add_cred_btn)
 
         # ── Buttons ───────────────────────────────────────────────
