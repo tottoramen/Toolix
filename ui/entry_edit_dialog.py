@@ -110,30 +110,59 @@ class MultiSelectCombo(QWidget):
             self._popup = None
             return
 
-        popup = QListWidget()
-        popup.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)
+        popup = QWidget(self, Qt.Window | Qt.FramelessWindowHint)
         popup.setStyleSheet(POPUP_STYLE)
-        popup.setMinimumWidth(self._btn.width())
-        popup.setMaximumHeight(320)
         popup.installEventFilter(self)
 
+        v = QVBoxLayout(popup)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+
+        search = QLineEdit()
+        search.setPlaceholderText("搜索…")
+        search.setClearButtonEnabled(True)
+        search.setStyleSheet("QLineEdit { background-color: #313244; color: #cdd6f4; "
+                             "border: none; border-bottom: 1px solid #45475a; "
+                             "padding: 6px 8px; border-radius: 0; }")
+        v.addWidget(search)
+
+        list_w = QListWidget()
+        list_w.setMinimumWidth(self._btn.width())
         for it in self._items:
             item = QListWidgetItem(it["name"])
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if it["checked"] else Qt.Unchecked)
             item.setData(Qt.UserRole, it["id"])
-            popup.addItem(item)
+            list_w.addItem(item)
+        list_w.itemChanged.connect(lambda: self._on_popup_changed(list_w))
+        v.addWidget(list_w)
 
-        popup.itemChanged.connect(lambda: self._on_popup_changed(popup))
+        search.textChanged.connect(lambda t: self._filter_list(list_w, t))
+
+        # Fixed list height = whole rows; scroll if more than max_rows.
+        row_h = list_w.sizeHintForRow(0)
+        if row_h > 0:
+            max_rows = 10
+            rows = min(len(self._items), max_rows)
+            list_w.setFixedHeight(row_h * rows + 2 * list_w.frameWidth())
+        popup.setMinimumWidth(max(self._btn.width(), 180))
 
         # Position below the button
         pos = self._btn.mapToGlobal(QPoint(0, self._btn.height() + 2))
         popup.move(pos)
         popup.show()
+        search.setFocus()
         self._popup = popup
 
         # Install app-level event filter to close popup on outside click
         QApplication.instance().installEventFilter(self)
+
+    def _filter_list(self, list_w, text: str) -> None:
+        """Hide rows whose text doesn't contain the search string (case-insensitive)."""
+        t = text.lower().strip()
+        for i in range(list_w.count()):
+            it = list_w.item(i)
+            it.setHidden(bool(t) and t not in it.text().lower())
 
     def eventFilter(self, obj, event):
         """Close popup when clicking outside (app-level) + track hide."""
@@ -251,7 +280,7 @@ class EntryEditDialog(QDialog):
         self._on_type_changed()
 
         # ── Environments ──────────────────────────────────────────
-        layout.addWidget(QLabel("环境标签", objectName="section-title"))
+        layout.addWidget(QLabel("标签", objectName="section-title"))
         env_items = [(e.id, e.name, e.id in entry.envs) for e in all_environments]
         self._env_combo = MultiSelectCombo(env_items)
         layout.addWidget(self._env_combo)
@@ -273,6 +302,10 @@ class EntryEditDialog(QDialog):
         # ── Buttons ───────────────────────────────────────────────
         layout.addSpacing(8)
         btn_row = QHBoxLayout()
+        del_btn = QPushButton("🗑 删除此配置")
+        del_btn.setObjectName("del-btn")
+        del_btn.clicked.connect(self._on_delete)
+        btn_row.addWidget(del_btn)
         btn_row.addStretch()
         cancel_btn = QPushButton("取消")
         cancel_btn.clicked.connect(self.reject)
@@ -285,6 +318,7 @@ class EntryEditDialog(QDialog):
 
         # ── Populate existing data ────────────────────────────────
         self._cred_rows: list[dict] = []  # list of widget dicts per credential
+        self._deleted = False
         for cred in entry.credentials:
             self._add_credential(cred)
 
@@ -296,8 +330,15 @@ class EntryEditDialog(QDialog):
             self._env_combo.close_popup()
         return super().eventFilter(obj, event)
 
+    def hideEvent(self, event):
+        """Close the env popup whenever the dialog hides (accept/reject/X)."""
+        self._env_combo.close_popup()
+        super().hideEvent(event)
+
     def _add_credential(self, cred: Credential | None = None):
-        """Append one credential group (pre-filled if cred given)."""
+        """Append one credential group (pre-filled if cred given).
+        Username/password rows only appear when the cred actually has them
+        (or for a fresh credential) — clearing them persists as absent."""
         frame = QFrame()
         frame.setFrameStyle(QFrame.StyledPanel)
         frame.setStyleSheet(f"QFrame {{ background-color: {SURFACE}; border: 1px solid {OVERLAY}; "
@@ -318,69 +359,63 @@ class EntryEditDialog(QDialog):
         hdr.addWidget(rm_btn)
         v.addLayout(hdr)
 
-        # Username row (key editable, deletable)
-        u_row = QHBoxLayout()
-        u_key_edit = QLineEdit("用户")
-        u_key_edit.setPlaceholderText("键")
-        u_key_edit.setFixedWidth(60)
-        u_row.addWidget(u_key_edit)
-        u_val_edit = QLineEdit(cred.username if cred else "")
-        u_val_edit.setPlaceholderText("值")
-        u_row.addWidget(u_val_edit, 1)
-        u_rm_btn = QPushButton("✕")
-        u_rm_btn.setFixedWidth(28)
-        u_rm_btn.setStyleSheet(
-            f"QPushButton {{ background-color: {RED}; color: {BASE}; "
-            f"border-radius: 3px; padding: 2px; font-size: 11px; }}")
-        u_row.addWidget(u_rm_btn)
-        v.addLayout(u_row)
+        row_data: dict = {"frame": frame, "label": lbl_edit, "field_rows": []}
 
-        # Password row (key editable, deletable)
-        p_row = QHBoxLayout()
-        p_key_edit = QLineEdit("密码")
-        p_key_edit.setPlaceholderText("键")
-        p_key_edit.setFixedWidth(60)
-        p_row.addWidget(p_key_edit)
-        p_val_edit = QLineEdit(cred.password if cred else "")
-        p_val_edit.setPlaceholderText("值")
-        p_row.addWidget(p_val_edit, 1)
-        p_rm_btn = QPushButton("✕")
-        p_rm_btn.setFixedWidth(28)
-        p_rm_btn.setStyleSheet(
-            f"QPushButton {{ background-color: {RED}; color: {BASE}; "
-            f"border-radius: 3px; padding: 2px; font-size: 11px; }}")
-        p_row.addWidget(p_rm_btn)
-        v.addLayout(p_row)
+        # Username row — only if cred has a username (or it's a fresh credential)
+        if cred is None or cred.username:
+            u_row = QHBoxLayout()
+            u_key_edit = QLineEdit("用户")
+            u_key_edit.setPlaceholderText("键")
+            u_key_edit.setFixedWidth(60)
+            u_row.addWidget(u_key_edit)
+            u_val_edit = QLineEdit(cred.username if cred and cred.username else "")
+            u_val_edit.setPlaceholderText("值")
+            u_row.addWidget(u_val_edit, 1)
+            u_rm_btn = QPushButton("✕")
+            u_rm_btn.setFixedWidth(28)
+            u_rm_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {RED}; color: {BASE}; "
+                f"border-radius: 3px; padding: 2px; font-size: 11px; }}")
+            u_row.addWidget(u_rm_btn)
+            v.addLayout(u_row)
+            row_data["user_row"] = {"layout": u_row, "key_edit": u_key_edit,
+                                    "value_edit": u_val_edit, "rm_btn": u_rm_btn}
+            u_rm_btn.clicked.connect(lambda checked, rd=row_data: self._remove_field_row(rd, "user_row"))
+
+        # Password row — only if cred has a password (or it's a fresh credential)
+        if cred is None or cred.password:
+            p_row = QHBoxLayout()
+            p_key_edit = QLineEdit("密码")
+            p_key_edit.setPlaceholderText("键")
+            p_key_edit.setFixedWidth(60)
+            p_row.addWidget(p_key_edit)
+            p_val_edit = QLineEdit(cred.password if cred and cred.password else "")
+            p_val_edit.setPlaceholderText("值")
+            p_row.addWidget(p_val_edit, 1)
+            p_rm_btn = QPushButton("✕")
+            p_rm_btn.setFixedWidth(28)
+            p_rm_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {RED}; color: {BASE}; "
+                f"border-radius: 3px; padding: 2px; font-size: 11px; }}")
+            p_row.addWidget(p_rm_btn)
+            v.addLayout(p_row)
+            row_data["pass_row"] = {"layout": p_row, "key_edit": p_key_edit,
+                                    "value_edit": p_val_edit, "rm_btn": p_rm_btn}
+            p_rm_btn.clicked.connect(lambda checked, rd=row_data: self._remove_field_row(rd, "pass_row"))
 
         # Custom fields
         fields_layout = QVBoxLayout()
         fields_layout.setSpacing(4)
         v.addLayout(fields_layout)
+        row_data["fields_layout"] = fields_layout
 
         add_f_btn = QPushButton("+ 添加字段")
         add_f_btn.setStyleSheet(f"QPushButton {{ background-color: transparent; color: {GREEN}; "
                                 f"border: 1px dashed {OVERLAY}; font-size: 11px; padding: 3px 8px; }}")
         v.addWidget(add_f_btn)
 
-        row_data = {
-            "frame": frame,
-            "label": lbl_edit,
-            "user_row": {"layout": u_row, "key_edit": u_key_edit,
-                         "value_edit": u_val_edit, "rm_btn": u_rm_btn},
-            "pass_row": {"layout": p_row, "key_edit": p_key_edit,
-                         "value_edit": p_val_edit, "rm_btn": p_rm_btn},
-            "fields_layout": fields_layout,
-            "field_rows": [],
-        }
         self._cred_rows.append(row_data)
-
-        # Wire delete buttons
-        u_rm_btn.clicked.connect(lambda checked, rd=row_data: self._remove_field_row(
-            rd, "user_row"))
-        p_rm_btn.clicked.connect(lambda checked, rd=row_data: self._remove_field_row(
-            rd, "pass_row"))
         self._cred_area.addWidget(frame)
-
         add_f_btn.clicked.connect(lambda checked, rd=row_data: self._add_field(rd))
 
         # Pre-fill fields
@@ -511,6 +546,18 @@ class EntryEditDialog(QDialog):
 
         save_config(self._config)
         self.accept()
+
+    def _on_delete(self):
+        """Confirm and mark this entry for deletion; caller checks is_deleted()."""
+        from PySide6.QtWidgets import QMessageBox
+        if QMessageBox.question(self, "删除配置",
+                                "确定删除该配置？此操作不可撤销。"
+                                ) == QMessageBox.StandardButton.Yes:
+            self._deleted = True
+            self.accept()
+
+    def is_deleted(self) -> bool:
+        return self._deleted
 
     # ── Utility ───────────────────────────────────────────────────
 

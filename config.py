@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from models import Config, Tool, Entry, Environment, Credential, Command, Field, ClaudeModel
+from models import Config, FilterItem, Entry, Credential, Command, Field, ClaudeModel
 
 # Module-level config path, set by main.py on startup
 _config_file_path: Path | None = None
@@ -34,54 +34,115 @@ def load_config() -> Config:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    return _parse_config(data)
+    config = _parse_config(data)
+    if _dedupe(config):
+        save_config(config)  # persist the auto-repair
+    return config
+
+
+def _dedupe(config: Config) -> bool:
+    """Auto-repair duplicate / stale data so a polluted config can't crash the app.
+
+    - items with the same (name, type): keep the first; tools absorb non-empty
+      entries from the dupes.
+    - card_order: drop stale + duplicate keys, append any missing.
+    Returns True if anything changed (caller persists).
+    """
+    changed = False
+
+    # items: merge by (name, type)
+    by_key: dict[tuple, FilterItem] = {}
+    order: list[tuple] = []
+    for it in config.items:
+        key = (it.name, it.type)
+        if key in by_key:
+            if it.type == "tool":
+                for e in it.entries:
+                    if not e.is_empty:
+                        by_key[key].entries.append(e)
+            changed = True
+        else:
+            by_key[key] = it
+            order.append(key)
+    if changed:
+        config.items = [by_key[k] for k in order]
+
+    # card_order: keep valid + unique, append any missing entry keys (tools only)
+    valid = {f"{it.id}:{i}" for it in config.items if it.type == "tool"
+             for i in range(len(it.entries))}
+    seen_k: set[str] = set()
+    new_card: list[str] = []
+    for k in config.card_order:
+        if k in valid and k not in seen_k:
+            seen_k.add(k)
+            new_card.append(k)
+    for it in config.items:
+        if it.type != "tool":
+            continue
+        for i in range(len(it.entries)):
+            k = f"{it.id}:{i}"
+            if k not in seen_k:
+                seen_k.add(k)
+                new_card.append(k)
+    if len(new_card) != len(config.card_order):
+        config.card_order = new_card
+        changed = True
+
+    return changed
 
 
 def _parse_config(data: dict) -> Config:
     """Parse raw JSON dict into Config model."""
-    environments = [
-        Environment(id=e["id"], name=e["name"])
-        for e in data.get("environments", [])
-    ]
-    tools = []
-    for t in data.get("tools", []):
-        entries = []
-        for entry_data in t.get("entries", []):
-            creds = [
-                Credential(
-                    label=c["label"],
-                    username=c.get("username", ""),
-                    password=c.get("password", ""),
-                    fields=[Field(key=f["key"], value=f["value"]) for f in c.get("fields", [])]
-                )
-                for c in entry_data.get("credentials", [])
-            ]
-            cmds = [
-                Command(label=c["label"], command=c["command"])
-                for c in entry_data.get("commands", [])
-            ]
-            entries.append(Entry(
-                envs=_parse_envs(entry_data),
-                url=entry_data.get("url"),
-                ssh=entry_data.get("ssh"),
-                credentials=creds,
-                commands=cmds,
+    items: list[FilterItem] = []
+
+    # New format: single cross-mixed "items" array
+    for it in data.get("items", []):
+        t = it.get("type", "tool")
+        if t == "tool":
+            items.append(FilterItem(
+                type="tool",
+                id=it["id"],
+                name=it["name"],
+                icon=it.get("icon", ""),
+                entries=_parse_entries(it),
             ))
-        tools.append(Tool(
-            id=t["id"],
-            name=t["name"],
-            icon=t.get("icon", ""),
-            entries=entries,
-        ))
+        else:
+            items.append(FilterItem(type="env", id=it["id"], name=it["name"]))
+
+    # Backward compat: old format had separate "tools" + "environments" arrays.
+    # If the old "filter_order" field exists, use it to preserve the user's
+    # custom cross-mixed chip order; otherwise default to tools then envs.
+    if not items:
+        by_key: dict[tuple, FilterItem] = {}
+        for t in data.get("tools", []):
+            by_key[(t["name"], "tool")] = FilterItem(
+                type="tool", id=t["id"], name=t["name"],
+                icon=t.get("icon", ""), entries=_parse_entries(t))
+        for e in data.get("environments", []):
+            by_key[(e["name"], "env")] = FilterItem(type="env", id=e["id"], name=e["name"])
+
+        for entry in data.get("filter_order", []):
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                key = (entry[0], entry[1])
+                if key in by_key:
+                    items.append(by_key.pop(key))
+        for t in data.get("tools", []):
+            key = (t["name"], "tool")
+            if key in by_key:
+                items.append(by_key.pop(key))
+        for e in data.get("environments", []):
+            key = (e["name"], "env")
+            if key in by_key:
+                items.append(by_key.pop(key))
+
     claude_models = [
         ClaudeModel(id=m["id"], name=m["name"], env=m.get("env", {}))
         for m in data.get("claude_models", [])
     ]
     claude_dirs = data.get("claude_dirs", ["claude", "udreader", "Toolix"])
-    return Config(tools=tools, environments=environments,
+    return Config(items=items,
                   claude_models=claude_models,
                   claude_dirs=claude_dirs,
-                  filter_order=data.get("filter_order", []),
                   tool_order=data.get("tool_order", []),
                   card_order=data.get("card_order", []))
 
@@ -89,30 +150,20 @@ def _parse_config(data: dict) -> Config:
 def save_config(config: Config) -> None:
     """Save config back to config.json."""
     data = {
-        "filter_order": config.filter_order,
         "tool_order": config.tool_order,
         "card_order": config.card_order,
         "claude_dirs": config.claude_dirs,
-        "environments": [
-            {"id": e.id, "name": e.name}
-            for e in config.environments
-        ],
         "claude_models": [
             {"id": m.id, "name": m.name, "env": m.env}
             for m in config.claude_models
         ],
-        "tools": [
-            {
-                "id": t.id,
-                "name": t.name,
-                "icon": t.icon,
-                "entries": [
-                    _entry_to_dict(entry)
-                    for entry in t.entries
-                ]
-            }
-            for t in config.tools
-        ]
+        "items": [
+            {"type": "tool", "id": it.id, "name": it.name, "icon": it.icon,
+             "entries": [_entry_to_dict(e) for e in it.entries]}
+            if it.type == "tool"
+            else {"type": "env", "id": it.id, "name": it.name}
+            for it in config.items
+        ],
     }
     path = _config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -129,6 +180,33 @@ def _parse_envs(entry_data: dict) -> list[str]:
     if env is not None:
         return [env] if isinstance(env, str) else env
     return []
+
+
+def _parse_entries(item: dict) -> list[Entry]:
+    """Parse the 'entries' array of a tool item."""
+    entries = []
+    for entry_data in item.get("entries", []):
+        creds = [
+            Credential(
+                label=c["label"],
+                username=c.get("username", ""),
+                password=c.get("password", ""),
+                fields=[Field(key=f["key"], value=f["value"]) for f in c.get("fields", [])]
+            )
+            for c in entry_data.get("credentials", [])
+        ]
+        cmds = [
+            Command(label=c["label"], command=c["command"])
+            for c in entry_data.get("commands", [])
+        ]
+        entries.append(Entry(
+            envs=_parse_envs(entry_data),
+            url=entry_data.get("url"),
+            ssh=entry_data.get("ssh"),
+            credentials=creds,
+            commands=cmds,
+        ))
+    return entries
 
 
 def _entry_to_dict(entry: Entry) -> dict:

@@ -23,8 +23,8 @@ class MatrixTable(QScrollArea):
 
         self._config: Config | None = None
         self._filter_text = ""
-        self._tool_filter = ""
-        self._env_filter = ""
+        self._tool_filter_names: set[str] = set()
+        self._env_filter_names: set[str] = set()
         self._env_names: dict[str, str] = {}
         self._last_w = 0
         self._rebuilding = False
@@ -47,30 +47,24 @@ class MatrixTable(QScrollArea):
     # ── config / filter ──────────────────────────────────────────
 
     def set_config(self, config: Config) -> None:
-        log(f"MatrixTable.set_config enter tools={len(config.tools)}")
         self._config = config
         self._env_names = {e.id: e.name for e in config.environments}
         self._lay_out()
-        log("MatrixTable.set_config done")
 
     def apply_filter(self, text: str) -> None:
         self._filter_text = text.lower().strip()
-        self._tool_filter = ""
-        self._env_filter = ""
+        self._tool_filter_names = set()
+        self._env_filter_names = set()
         if self._config:
             self._lay_out()
 
-    def set_tool_filter(self, tool_name: str) -> None:
-        self._tool_filter = tool_name
-        self._filter_text = ""
-        self._env_filter = ""
+    def set_tool_filter(self, names: list[str]) -> None:
+        self._tool_filter_names = set(names)
         if self._config:
             self._lay_out()
 
-    def set_env_filter(self, env_name: str) -> None:
-        self._env_filter = env_name
-        self._filter_text = ""
-        self._tool_filter = ""
+    def set_env_filter(self, names: list[str]) -> None:
+        self._env_filter_names = set(names)
         if self._config:
             self._lay_out()
 
@@ -121,11 +115,9 @@ class MatrixTable(QScrollArea):
         return result
 
     def _lay_out(self):
-        log(f"MatrixTable._lay_out enter rebuilding={self._rebuilding}")
         if self._rebuilding:
             return
         self._rebuilding = True
-        log("MatrixTable._lay_out clearing old widgets")
 
         while self._layout.count():
             item = self._layout.takeAt(0)
@@ -143,27 +135,24 @@ class MatrixTable(QScrollArea):
             self._rebuilding = False
             return
 
-        log("MatrixTable._lay_out collecting visible items")
         items: list[tuple[str, Tool, Entry]] = []
         for key, tool, entry in self._ordered_entries():
             if entry.is_empty:
                 continue
-            if self._tool_filter and tool.name != self._tool_filter:
+            if self._tool_filter_names and tool.name not in self._tool_filter_names:
                 continue
-            if self._env_filter:
-                env_names = [self._env_names.get(eid, eid) for eid in entry.envs]
-                if self._env_filter not in env_names:
+            if self._env_filter_names:
+                entry_env_names = {self._env_names.get(eid, eid) for eid in entry.envs}
+                if not (entry_env_names & self._env_filter_names):
                     continue
             if not self._entry_visible(tool.name, entry):
                 continue
             items.append((key, tool, entry))
 
         if not items:
-            log("MatrixTable._lay_out no visible items, done")
             self._rebuilding = False
             return
 
-        log(f"MatrixTable._lay_out building {len(items)} cards")
         avail = max(self.width() - 24, 200)
         row = QHBoxLayout()
         row.setSpacing(4)
@@ -192,7 +181,6 @@ class MatrixTable(QScrollArea):
         row.addStretch()
         self._layout.addStretch()
         self._rebuilding = False
-        log("MatrixTable._lay_out done")
 
     def _entry_visible(self, tool_name: str, entry: Entry) -> bool:
         if not self._filter_text:
@@ -211,7 +199,6 @@ class MatrixTable(QScrollArea):
         return False
 
     def _build_card(self, key: str, tool: Tool, entry: Entry) -> QWidget:
-        log(f"MatrixTable._build_card key={key} tool={tool.name}")
         card = QWidget()
         card.setObjectName("cell-content-dragging" if key == self._drag_key else "cell-content")
         card.setProperty("drag_key", key)
@@ -368,11 +355,11 @@ class MatrixTable(QScrollArea):
         for key, tool, entry in self._ordered_entries():
             if entry.is_empty:
                 continue
-            if self._tool_filter and tool.name != self._tool_filter:
+            if self._tool_filter_names and tool.name not in self._tool_filter_names:
                 continue
-            if self._env_filter:
-                env_names = [self._env_names.get(eid, eid) for eid in entry.envs]
-                if self._env_filter not in env_names:
+            if self._env_filter_names:
+                entry_env_names = {self._env_names.get(eid, eid) for eid in entry.envs}
+                if not (entry_env_names & self._env_filter_names):
                     continue
             if not self._entry_visible(tool.name, entry):
                 continue
@@ -456,8 +443,34 @@ class MatrixTable(QScrollArea):
         dlg = EntryEditDialog(entry, tool.name, self._config.environments,
                               self._config, self)
         if dlg.exec():
-            self._lay_out()
+            if dlg.is_deleted():
+                try:
+                    idx = tool.entries.index(entry)
+                    tool.entries.pop(idx)
+                    self._shift_card_order_after_delete(tool.id, idx)
+                except ValueError:
+                    pass
             self.tool_order_changed.emit()
+            self._lay_out()
+
+    def _shift_card_order_after_delete(self, tid: str, removed_idx: int) -> None:
+        """Drop tid:removed_idx from card_order and decrement later indices of
+        the same tool so remaining keys stay valid."""
+        new_order = []
+        for key in self._config.card_order:
+            if key == f"{tid}:{removed_idx}":
+                continue
+            if key.startswith(f"{tid}:"):
+                _, idx_s = key.rsplit(":", 1)
+                try:
+                    idx = int(idx_s)
+                except ValueError:
+                    new_order.append(key)
+                    continue
+                new_order.append(f"{tid}:{idx - 1}" if idx > removed_idx else key)
+            else:
+                new_order.append(key)
+        self._config.card_order = new_order
 
 
 class _AddEntryDialog(QDialog):

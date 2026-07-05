@@ -14,8 +14,14 @@ Toolix — 桌面工具控制面板。Python + PySide6。用户说"面板"即指
 # 运行
 python D:/projects/Toolix/main.py
 
-# 打包 + 启动（推荐）
+# debug 阶段：带日志直接 python 跑（改完代码立即验证，不必打包）
+$env:TOOLIX_DEBUG=1; python D:/projects/Toolix/main.py
+
+# 打包 + 启动（推荐，发布前）
 D:/projects/Toolix/build.ps1
+
+# 带日志启动 exe（排查打包版问题，日志写入 ~/toolix-debug.log）
+$env:TOOLIX_DEBUG=1; & "D:/projects/Toolix/dist/Toolix/Toolix.exe"
 ```
 
 ## 调试
@@ -39,10 +45,10 @@ D:/projects/Toolix/build.ps1
 
 1. **Read** `toolix.json`，确认现有 tools/environments
 2. **改** — 增删改联动：
-   - 加环境 → `environments` + `filter_order`
-   - 加工具 → `tools` + `filter_order` + `card_order`
-   - 删环境 → 先确认无 entry 引用，再删 `environments` + `filter_order`
-   - 删工具 → 清理 `filter_order` + `card_order`
+   - 加环境 → `environments`
+   - 加工具 → `tools` + `card_order`
+   - 删环境 → 先确认无 entry 引用，再删 `environments`
+   - 删工具 → 清理 `card_order`
    - 加模型 → 追加到 `claude_models` 数组
 3. **校验** — `python -c "import json; c=json.load(open('toolix.json','r',encoding='utf-8')); print('OK')"`
 4. **重启** — `Stop-Process -Name Toolix -Force; Start-Process "dist/Toolix/Toolix.exe"`

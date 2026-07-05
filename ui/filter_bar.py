@@ -2,14 +2,13 @@
 
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton,
-    QDialog, QLabel, QLineEdit, QButtonGroup, QRadioButton,
+    QDialog, QLabel, QLineEdit, QButtonGroup, QRadioButton, QMessageBox,
 )
 from PySide6.QtCore import Signal, Qt, QPoint, QTimer, QRectF
 from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QFont
 import re
 
-from models import Tool, Entry, Environment
-from debug_log import log
+from models import FilterItem, Entry
 
 
 def _to_kebab(name: str) -> str:
@@ -45,6 +44,9 @@ CHIP_DIALOG_STYLE = f"""
     QPushButton#save-btn {{ background-color: {BLUE}; color: {BASE};
         font-weight: bold; font-size: 14px; padding: 6px 20px; }}
     QPushButton#save-btn:hover {{ background-color: #b4d0fb; }}
+    QPushButton#del-btn {{ background-color: {RED}; color: {BASE};
+        font-weight: bold; font-size: 12px; }}
+    QPushButton#del-btn:hover {{ background-color: #fab7c1; }}
 """
 
 
@@ -53,6 +55,7 @@ class _ChipEditDialog(QDialog):
 
     def __init__(self, name: str, ftype: str, parent=None):
         super().__init__(parent)
+        self._delete_requested = False
         self.setWindowTitle("新增标签" if not name else "编辑标签")
         self.setMinimumWidth(320)
         self.setStyleSheet(CHIP_DIALOG_STYLE)
@@ -82,6 +85,11 @@ class _ChipEditDialog(QDialog):
 
         layout.addSpacing(8)
         btn_row = QHBoxLayout()
+        if name:
+            del_btn = QPushButton("🗑 删除")
+            del_btn.setObjectName("del-btn")
+            del_btn.clicked.connect(self._on_delete_clicked)
+            btn_row.addWidget(del_btn)
         btn_row.addStretch()
         cancel_btn = QPushButton("取消")
         cancel_btn.clicked.connect(self.reject)
@@ -107,6 +115,13 @@ class _ChipEditDialog(QDialog):
         rb = self._type_group.checkedButton()
         ftype = rb.property("type_key") if rb else "tool"
         return (name, ftype)
+
+    def _on_delete_clicked(self):
+        self._delete_requested = True
+        self.accept()
+
+    def delete_requested(self) -> bool:
+        return self._delete_requested
 
 
 class _DragButton(QPushButton):
@@ -146,7 +161,7 @@ class _DragButton(QPushButton):
 
     def mouseMoveEvent(self, event):
         # gear / text hover tracking
-        on_gear = self.width() - event.pos().x() < 32
+        on_gear = self.width() - event.pos().x() < 22
         if on_gear != self._gear_hover:
             self._gear_hover = on_gear
             self.update()
@@ -166,17 +181,22 @@ class _DragButton(QPushButton):
             ds = self._drag_start
             self._drag_start = None
             if (event.pos() - ds).manhattanLength() < 8:
-                if self.width() - event.pos().x() < 32:
-                    self.gear_clicked.emit(self._chip_name(), self._ftype)
+                gx = self.width() - event.pos().x()
+                chip = self._chip_name()
+                if gx < 22:
+                    self.gear_clicked.emit(chip, self._ftype)
                 else:
-                    self.clicked_signal.emit(self._chip_name())
-
+                    self.clicked_signal.emit(chip)
+            else:
+                pass
+        else:
+            pass
     def paintEvent(self, event):
         from PySide6.QtGui import QPainterPath
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        gear_w = 28
+        gear_w = 22
 
         # Colors
         if self._active:
@@ -232,8 +252,8 @@ class _DragButton(QPushButton):
 
 
 class FilterBar(QWidget):
-    tool_clicked = Signal(str)
-    env_clicked = Signal(str)
+    tool_filter_changed = Signal(list)  # selected tool names (multi-select)
+    env_filter_changed = Signal(list)   # selected env names (multi-select)
     filters_changed = Signal()  # emitted when chips are added/edited/deleted
 
     def __init__(self, parent=None):
@@ -241,7 +261,7 @@ class FilterBar(QWidget):
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(8, 2, 8, 2)
         self._outer.setSpacing(2)
-        self._active_chip: QPushButton | None = None
+        self._active: set[tuple[str, str]] = set()  # selected (name, ftype) chips
         self._items: list[tuple[str, str]] = []
         self._last_w = 0
         self._drag_item: str | None = None
@@ -254,15 +274,8 @@ class FilterBar(QWidget):
         self._save_fn = save_fn
 
     def set_filters(self, tools: list[str], envs: list[str]) -> None:
-        log(f"FilterBar.set_filters enter tools={len(tools)} envs={len(envs)}")
-        all_items = [(t, "tool") for t in tools] + [(e, "env") for e in envs]
-        saved = self._config.filter_order if self._config else []
-        if saved:
-            valid = set(all_items)
-            ordered = [(x[0], x[1]) for x in saved if isinstance(x, (list, tuple)) and len(x) == 2 and tuple(x[:2]) in valid]
-            self._items = ordered + [x for x in all_items if x not in ordered]
-        else:
-            self._items = all_items
+        # chip order == config.tools / config.environments array order
+        self._items = [(t, "tool") for t in tools] + [(e, "env") for e in envs]
         self._last_w = 0
         self._build()
 
@@ -273,9 +286,7 @@ class FilterBar(QWidget):
             self._build()
 
     def _build(self):
-        log("FilterBar._build enter")
         self._clear()
-        log("FilterBar._build cleared, laying out chips")
         w = max(self.width() - 16, 200)
         row = QHBoxLayout(); row.setSpacing(2)
         self._outer.addLayout(row)
@@ -287,9 +298,14 @@ class FilterBar(QWidget):
 
         for name, ftype in self._items:
             btn = self._make_chip(name, ftype)
+            if (name, ftype) in self._active:
+                btn.set_active(True)
             row, x = self._place(row, x, w, btn)
         row.addStretch()
-        log(f"FilterBar._build done chips={len(self._items)}")
+        # Force the bar tall enough for every chip row; otherwise the bottom
+        # rows clip and overlap the matrix, making those chips unclickable.
+        n_rows = max(1, self._outer.count())
+        self.setFixedHeight(n_rows * 34 + 8)
 
     def _make_add_btn(self):
         btn = QPushButton("+")
@@ -307,8 +323,7 @@ class FilterBar(QWidget):
         """Return base, or base-2 / base-3 ... so the new id never collides
         with an existing tool/env id. Duplicate ids corrupt tool_map and
         card_order and have caused crashes."""
-        existing = ({t.id for t in self._config.tools} if ftype == "tool"
-                    else {e.id for e in self._config.environments})
+        existing = {it.id for it in self._config.items if it.type == ftype}
         if base not in existing:
             return base
         i = 2
@@ -316,37 +331,39 @@ class FilterBar(QWidget):
             i += 1
         return f"{base}-{i}"
 
+    def _name_exists(self, name: str, ftype: str) -> bool:
+        """True if a tool/env with this exact display name already exists."""
+        return any(it.name == name and it.type == ftype for it in self._config.items)
+
     def _on_add_chip(self):
-        log("_on_add_chip enter")
         dlg = _ChipEditDialog("", "tool", self)
-        log("_on_add_chip opening dialog")
         res = dlg.prompt()
-        log(f"_on_add_chip dialog result={res}")
         if res is None:
             return
         name, ftype = res
         if self._config is None:
             return
 
+        if self._name_exists(name, ftype):
+            kind = "工具" if ftype == "tool" else "标签"
+            QMessageBox.warning(self, "名称已存在",
+                                f"{kind}「{name}」已存在，请换个名字。")
+            return
+
         # Add to config
         if ftype == "tool":
             tid = self._unique_id(_to_kebab(name), "tool")
-            log(f"_on_add_chip appending tool id={tid!r} name={name!r}")
-            self._config.tools.append(Tool(id=tid, name=name, entries=[Entry(envs=["general"])]))
+            self._config.items.append(FilterItem(type="tool", id=tid, name=name,
+                                                 entries=[Entry(envs=["general"])]))
             self._config.card_order.append(f"{tid}:0")
         else:
             eid = self._unique_id(_to_kebab(name), "env")
-            log(f"_on_add_chip appending env id={eid!r} name={name!r}")
-            self._config.environments.append(Environment(id=eid, name=name))
+            self._config.items.append(FilterItem(type="env", id=eid, name=name))
 
         self._items.append((name, ftype))
-        log("_on_add_chip -> _save_order")
         self._save_order()
-        log("_on_add_chip -> _build")
         self._build()
-        log("_on_add_chip -> emit filters_changed")
         self.filters_changed.emit()
-        log("_on_add_chip done")
 
     def _make_chip(self, name: str, ftype: str):
         color, bg = ("#89b4fa", "#1e2a3a") if ftype == "tool" else ("#a6adc8", "#252a35")
@@ -371,7 +388,6 @@ class FilterBar(QWidget):
         return row, x + bw
 
     def _clear(self):
-        log(f"FilterBar._clear enter count={self._outer.count()}")
         while self._outer.count():
             item = self._outer.takeAt(0)
             w = item.widget()
@@ -381,23 +397,29 @@ class FilterBar(QWidget):
                 while sub.count():
                     si = sub.takeAt(0)
                     if si.widget(): si.widget().hide(); si.widget().setParent(None)
-        self._active_chip = None
 
     # ── chip edit ─────────────────────────────────────────────────
 
     def _on_edit_chip(self, name: str, ftype: str = ""):
-        log(f"_on_edit_chip enter name={name!r} ftype={ftype!r}")
         dlg = _ChipEditDialog(name, ftype, self)
         res = dlg.prompt()
         if res is None:
             return
+        if dlg.delete_requested():
+            self._do_delete_chip(name, ftype)
+            return
         new_name, new_ftype = res
 
-        # Update filter_order
+        # Update items list (config arrays follow on save)
         old_key = (name, ftype)
         new_key = (new_name, new_ftype)
         if new_key == old_key:
             return
+
+        # carry selection over to the renamed chip
+        if old_key in self._active:
+            self._active.discard(old_key)
+            self._active.add(new_key)
 
         # Update items list
         for i, item in enumerate(self._items):
@@ -407,17 +429,49 @@ class FilterBar(QWidget):
 
         # Update underlying config objects
         if self._config:
-            if ftype == "tool":
-                for t in self._config.tools:
-                    if t.name == name:
-                        t.name = new_name
-                        break
-            else:
-                for e in self._config.environments:
-                    if e.name == name:
-                        e.name = new_name
-                        break
+            for it in self._config.items:
+                if it.name == name and it.type == ftype:
+                    it.name = new_name
+                    break
 
+        self._save_order()
+        self._build()
+        self.filters_changed.emit()
+
+    def _do_delete_chip(self, name: str, ftype: str) -> None:
+        """Delete a tool/env chip. Refuses if bound to a non-empty entry."""
+        if self._config is None:
+            return
+        item = next((it for it in self._config.items
+                     if it.name == name and it.type == ftype), None)
+        if item is None:
+            return
+        if ftype == "tool":
+            if any(not e.is_empty for e in item.entries):
+                QMessageBox.warning(self, "无法删除",
+                                    f"工具「{name}」下还有配置，请先在卡片⚙里删除其配置后再删工具。")
+                return
+            if QMessageBox.question(self, "删除工具",
+                                    f"确定删除工具「{name}」？"
+                                    ) != QMessageBox.StandardButton.Yes:
+                return
+            tid = item.id
+            self._config.card_order = [k for k in self._config.card_order
+                                       if not k.startswith(f"{tid}:")]
+        else:
+            used = [it.name for it in self._config.items if it.type == "tool"
+                    for e in it.entries if (not e.is_empty) and (item.id in e.envs)]
+            if used:
+                QMessageBox.warning(self, "无法删除",
+                                    f"标签「{name}」被 {len(used)} 个配置引用，无法删除。")
+                return
+            if QMessageBox.question(self, "删除标签",
+                                    f"确定删除标签「{name}」？"
+                                    ) != QMessageBox.StandardButton.Yes:
+                return
+        self._config.items.remove(item)
+        self._items = [it for it in self._items if it != (name, ftype)]
+        self._active.discard((name, ftype))
         self._save_order()
         self._build()
         self.filters_changed.emit()
@@ -431,6 +485,8 @@ class FilterBar(QWidget):
         self._drag_ftype = ftype
         QTimer.singleShot(0, lambda: self.grabMouse())
 
+    def mousePressEvent(self, event):
+        pass
     def mouseMoveEvent(self, event):
         if not self._drag_item:
             return
@@ -479,54 +535,76 @@ class FilterBar(QWidget):
         return chips[-1][2] + 1
 
     def _save_order(self):
-        if self._config is not None:
-            self._config.filter_order = [[n, ft] for n, ft in self._items]
-            if self._save_fn:
-                self._save_fn()
+        """Apply chip order to config.items (cross-mixed tool/env)."""
+        if self._config is None:
+            return
+        by_key = {(it.name, it.type): it for it in self._config.items}
+        new_items: list = []
+        used: set = set()
+        for name, ftype in self._items:
+            key = (name, ftype)
+            if key in by_key and key not in used:
+                new_items.append(by_key[key])
+                used.add(key)
+        for it in self._config.items:
+            key = (it.name, it.type)
+            if key not in used:
+                new_items.append(it)
+                used.add(key)
+        self._config.items = new_items
+        if self._save_fn:
+            self._save_fn()
 
-    # ── click / toggle ───────────────────────────────────────────
+    # ── click / toggle (multi-select) ──────────────────────────
 
-    def _on_tool(self, name): self._toggle(name, self.tool_clicked)
-    def _on_env(self, name):  self._toggle(name, self.env_clicked)
+    def _on_tool(self, name):
+        self._toggle(name, "tool")
 
-    def _toggle(self, name, signal):
-        btn = self._find(name)
-        if self._active_chip is btn:
-            self._deactivate(); signal.emit(""); return
-        if self._active_chip:
-            self._active_chip.set_active(False)
-        self._active_chip = btn
-        btn.set_active(True)
-        signal.emit(name)
+    def _on_env(self, name):
+        self._toggle(name, "env")
 
-    def _find(self, name):
+    def _toggle(self, name: str, ftype: str) -> None:
+        """Flip one chip's selected state; other selections are untouched."""
+        key = (name, ftype)
+        btn = self._find(name, ftype)
+        if btn is None:
+            return
+        if key in self._active:
+            self._active.discard(key)
+            btn.set_active(False)
+        else:
+            self._active.add(key)
+            btn.set_active(True)
+        self._emit_filters()
+
+    def _emit_filters(self) -> None:
+        tools = [n for (n, ft) in self._items if ft == "tool" and (n, ft) in self._active]
+        envs = [n for (n, ft) in self._items if ft == "env" and (n, ft) in self._active]
+        self.tool_filter_changed.emit(tools)
+        self.env_filter_changed.emit(envs)
+
+    def _find(self, name: str, ftype: str = ""):
         for i in range(self._outer.count()):
             sub = self._outer.itemAt(i).layout()
             if sub:
                 for j in range(sub.count()):
                     w = sub.itemAt(j).widget()
-                    if isinstance(w, _DragButton) and w._chip_name() == name:
+                    if (isinstance(w, _DragButton) and w._chip_name() == name
+                            and (not ftype or w.property("filter_type") == ftype)):
                         return w
         return None
 
-    def _deactivate(self):
-        if self._active_chip:
-            self._active_chip.set_active(False)
-        self._active_chip = None
-
     def select_tool(self, name: str) -> None:
-        btn = self._find(name)
-        if btn is None: return
-        self._deactivate()
-        self._active_chip = btn
-        btn.set_active(True)
+        """Toggle a tool chip (used by card-click on a tool tag)."""
+        self._toggle(name, "tool")
 
     def select_env(self, name: str) -> None:
-        btn = self._find(name)
-        if btn is None: return
-        self._deactivate()
-        self._active_chip = btn
-        btn.set_active(True)
+        self._toggle(name, "env")
 
-    def reset(self):
-        self._deactivate()
+    def reset(self) -> None:
+        """Clear all selections."""
+        if not self._active:
+            return
+        self._active.clear()
+        self._build()
+        self._emit_filters()

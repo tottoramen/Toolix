@@ -47,26 +47,31 @@ class Entry:
 
 
 @dataclass
-class Tool:
-    """A tool row in the matrix."""
+class FilterItem:
+    """A filter chip — either a tool (with entries) or an environment tag.
+    config.items order is the cross-mixed chip order shown in the filter bar."""
+    type: str  # "tool" | "env"
     id: str
     name: str
     icon: str = ""
     entries: list[Entry] = field(default_factory=list)
 
     def get_entry(self, env_id: str) -> Optional[Entry]:
-        """Return the first entry matching the given env_id, or None."""
+        """tool-only: first entry matching env_id, or None."""
         for e in self.entries:
             if env_id in e.envs:
                 return e
         return None
 
+    @property
+    def is_empty(self) -> bool:
+        """tool-only: True if no actionable entry."""
+        return not any(not e.is_empty for e in self.entries)
 
-@dataclass
-class Environment:
-    """An environment tag."""
-    id: str
-    name: str
+
+# Backwards-compatible aliases so older code can keep importing Tool / Environment.
+Tool = FilterItem
+Environment = FilterItem
 
 
 @dataclass
@@ -80,10 +85,16 @@ class ClaudeModel:
 @dataclass
 class Config:
     """Root configuration loaded from config.json."""
-    tools: list[Tool] = field(default_factory=list)
-    environments: list[Environment] = field(default_factory=list)
+    items: list[FilterItem] = field(default_factory=list)         # cross-mixed tool/env chips
     claude_models: list[ClaudeModel] = field(default_factory=list)
     claude_dirs: list[str] = field(default_factory=list)          # subdir names under D:\projects\
-    filter_order: list[list[str]] = field(default_factory=list)  # [[name, ftype], ...]
     tool_order: list[str] = field(default_factory=list)           # [tool_id, ...]
     card_order: list[str] = field(default_factory=list)           # ["tool_id:entry_idx", ...]
+
+    @property
+    def tools(self) -> list[FilterItem]:
+        return [it for it in self.items if it.type == "tool"]
+
+    @property
+    def environments(self) -> list[FilterItem]:
+        return [it for it in self.items if it.type == "env"]
