@@ -4,7 +4,7 @@
 
 A tag-based tool launcher with a card layout — open URLs, SSH terminals, Claude Code sessions, and manage credentials, all from a single panel.
 
-<img src="https://img.shields.io/badge/Python-3.10+-blue" alt="Python"> <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"> <img src="https://img.shields.io/badge/platform-Windows-lightgrey" alt="Platform">
+<img src="https://img.shields.io/badge/Python-3.10+-blue" alt="Python"> <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"> <img src="https://img.shields.io/badge/platform-Windows-lightgrey" alt="Windows"> <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="macOS">
 
 ## ✨ 功能
 
@@ -19,11 +19,30 @@ A tag-based tool launcher with a card layout — open URLs, SSH terminals, Claud
 
 ## 🚀 快速开始
 
-> **平台**: Windows 10/11。终端启动依赖 Windows Terminal (wt.exe) 或 cmd.exe。
+> **平台**: Windows 10/11 与 macOS 12+。终端启动:Windows 用 Windows Terminal (wt.exe) / cmd.exe,macOS 用 Terminal.app。
+
+### macOS 一键安装
+
+```bash
+bash install_mac.sh          # 装到 /Applications(可能提示 sudo 密码)
+bash install_mac.sh --user   # 装到 ~/Applications(无需 sudo)
+```
+
+自动建 venv、装依赖、PyInstaller 打包、安装到 `/Applications`、去除 Gatekeeper 隔离标记并启动。**可重复运行**,再次执行即更新到最新代码。
 
 ### 开发运行
 
+Windows:
+
 ```powershell
+pip install -r requirements.txt
+python main.py
+```
+
+macOS:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python main.py
 ```
@@ -39,13 +58,21 @@ cp config.example.json user_data/config.json
 
 配置结构见 [config.example.json](config.example.json)，或参考下方文档。
 
-### 打包 exe
+### 打包
+
+Windows(产出 `dist/Toolix/Toolix.exe`):
 
 ```powershell
 pyinstaller -y --onedir --windowed --name "Toolix" --icon icon.ico --exclude-module PyQt5 main.py
 ```
 
-`user_data/config.json` 与 exe 分离，更新配置无需重新打包。
+macOS(产出 `dist/Toolix/Toolix.app`):
+
+```bash
+bash build_mac.sh
+```
+
+配置文件 `toolix.json` 与 app 分离,更新配置无需重新打包。
 
 ## 🧱 架构
 
@@ -53,7 +80,7 @@ pyinstaller -y --onedir --windowed --name "Toolix" --icon icon.ico --exclude-mod
 main.py              — QMainWindow, 信号连接, filter_bar ↔ matrix 双向联动
 config.py            — JSON 配置加载/保存, 模板生成, 新旧格式兼容
 models.py            — 数据模型: Entry, Environment, Tool, Config
-actions.py           — 启动动作: 浏览器/终端/Claude Code
+actions.py           — 启动动作: 浏览器/终端/Claude Code(终端按平台分流:Win→wt.exe/cmd,mac→Terminal.app,Linux→x-terminal-emulator)
 ui/
   search_bar.py      — 搜索框
   filter_bar.py      — 可拖拽排序标签栏 (工具+环境混排)

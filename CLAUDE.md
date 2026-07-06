@@ -24,6 +24,15 @@ D:/projects/Toolix/build.ps1
 $env:TOOLIX_DEBUG=1; & "D:/projects/Toolix/dist/Toolix/Toolix.exe"
 ```
 
+**mac 一键安装**（在 mac 上执行,产出 `/Applications/Toolix.app`,可重复运行即更新）：
+
+```bash
+bash install_mac.sh          # 装到 /Applications(可能提示 sudo 密码)
+bash install_mac.sh --user   # 装到 ~/Applications(无需 sudo)
+```
+
+流程:平台检测 → Python 3.10+ → 建 `.venv` → 装依赖(requirements.txt + pyinstaller)→ killall → `pyinstaller --onedir --windowed`(命令行参数,不用 Windows 专用的 `Toolix.spec`)→ 装到目标目录 → `xattr -dr com.apple.quarantine` 去隔离 → `open` 启动。
+
 ## 调试
 
 `debug_log.py` 提供 trace 日志 + `faulthandler`（segfault 时把 C 栈 dump 到同一文件）。**默认关闭、零开销** —— `init()`/`log()` 首行即 return，不建文件、不挂 handler。
@@ -62,9 +71,29 @@ $env:TOOLIX_DEBUG=1; & "D:/projects/Toolix/dist/Toolix/Toolix.exe"
 
 ## ClaudeCodeDialog
 
-- 工作目录: `D:\projects\` 下的子目录，由 `toolix.json` 的 `claude_dirs` 数组驱动（默认 `["claude", "udreader", "Toolix"]`）
-- macOS 下工作目录自动切换为 `~/projects/`
-- 模型列表由 `toolix.json` 的 `claude_models` 驱动
-- 启动: Windows 写临时 ps1 → `powershell -NoExit -ExecutionPolicy Bypass -File`（不能用 bat）
-- 启动: macOS 写临时 .command → `chmod 755` → `open -a Terminal`
-- QSettings("Kiwi", "Toolix") 记忆选择
+启动本地 Claude Code 的对话框。**加/改/删模型只动 `toolix.json` 的 `claude_models`，零代码改动，重启面板生效。** 不用读 `config.py`/`cell_widget.py`/`models.py`。
+
+`claude_models` 是数组，每项三个字段：
+
+```json
+{
+  "id": "glm-5.2-2",            // 必须全局唯一：对话框按 id 建 env 映射、QSettings 存 claude/model
+  "name": "GLM-5.2 (2)",        // 对话框单选项显示名
+  "env": {                      // 启动时全部注入临时脚本，再跑 claude
+    "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+    "ANTHROPIC_AUTH_TOKEN": "<key>",
+    "ANTHROPIC_MODEL": "glm-5.2[1m]",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2[1m]",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7"
+  }
+}
+```
+
+- 加模型 → 复制一项，改 `id`（唯一）+ `name` + `env`，追加到 `claude_models`
+- 删模型 → 直接删该项
+- 改 key/端点/模型映射 → 改对应项的 `env`，别动代码
+- 可选 env：`CLAUDE_CODE_SUBAGENT_MODEL`（子 agent 模型，未设回退主力）、`CLAUDE_CODE_EFFORT_LEVEL`（`low`/`medium`/`high`/`max`）、`CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+- env 注入：Windows 写 `$env:KEY = 'value'` 进临时 .ps1 → `powershell -NoExit -ExecutionPolicy Bypass -File`（不能用 bat）；macOS 写 `export KEY='value'` 进 .command → `chmod 755` → `open -a Terminal`
+- 工作目录: `D:\projects\` 下子目录，由 `claude_dirs` 驱动（默认 `["claude", "udreader", "Toolix"]`）；macOS 自动切 `~/projects/`
+- QSettings("Kiwi", "Toolix") 记 `claude/dir` + `claude/model`
