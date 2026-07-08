@@ -1,6 +1,7 @@
 """Action dispatchers for tool entries."""
 
 import os
+import re
 import subprocess
 import sys
 import webbrowser
@@ -39,6 +40,29 @@ def run_command(cmd_index: int, entry: Entry) -> None:
         pass
 
 
+def _ensure_ssh_hostkey(command: str) -> str:
+    """If *command* is an SSH invocation:
+    1. On Windows, force C:\\Windows\\System32\\OpenSSH\\ssh.exe (native OpenSSH)
+       to avoid MSYS2 SSH (Git) mangling Chinese usernames in paths.
+    2. Inject -o StrictHostKeyChecking=accept-new so the terminal doesn't hang
+       on the interactive (yes/no) prompt.
+    """
+    m = re.match(r'^(\s*(?:\S*[/\\])?ssh(?:\.exe)?)(\s|$)', command)
+    if not m:
+        return command
+
+    # On Windows, always use the native OpenSSH client
+    if sys.platform == "win32":
+        native_ssh = os.path.expandvars(r"%SystemRoot%\System32\OpenSSH\ssh.exe")
+        command = native_ssh + command[m.end(1):]
+
+    # Avoid interactive host-key prompt
+    if not re.search(r'-o\s+StrictHostKeyChecking=', command):
+        return re.sub(r'(ssh(?:\.exe)?)', r'\1 -o StrictHostKeyChecking=accept-new', command, count=1)
+
+    return command
+
+
 def _open_terminal(command: str) -> None:
     """Open a terminal window and execute the given command.
 
@@ -46,6 +70,7 @@ def _open_terminal(command: str) -> None:
     macOS: opens Terminal.app.
     Linux: uses x-terminal-emulator.
     """
+    command = _ensure_ssh_hostkey(command)
     if sys.platform == "darwin":
         # macOS: open Terminal.app and run the command
         escaped = command.replace("\\", "\\\\").replace('"', '\\"')
